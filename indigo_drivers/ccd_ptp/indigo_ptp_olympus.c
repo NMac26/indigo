@@ -196,6 +196,25 @@ char *ptp_property_olympus_value_code_label(indigo_device *device, uint16_t prop
 				case 0x8804: return "Movie";
 			}
 			break;
+		case ptp_property_olympus_DriveMode:
+			// confirmed on OM-1 by stepping through the drive menu: 0x20 flag =
+			// silent (electronic shutter), 0x40 flag = Pro Capture
+			switch (code) {
+				case 0x01: return "Single";
+				case 0x21: return "Silent Single";
+				case 0x07: return "Sequential";
+				case 0x27: return "Silent Sequential";
+				case 0x28: return "SH1";
+				case 0x29: return "SH2";
+				case 0x43: return "Pro Capture";
+				case 0x48: return "Pro Capture SH1";
+				case 0x49: return "Pro Capture SH2";
+				case 0x04: return "Self-timer 12s";
+				case 0x05: return "Self-timer 2s";
+				case 0x24: return "Silent Self-timer 2s";
+				case 0x06: return "Custom Self-timer";
+			}
+			break;
 		case ptp_property_olympus_ImageFormat:
 			switch (code) {
 				case 0x020: return "RAW";
