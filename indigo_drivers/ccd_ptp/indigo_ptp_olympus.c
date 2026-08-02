@@ -334,8 +334,17 @@ bool ptp_olympus_handle_event(indigo_device *device, ptp_event_code code, uint32
 			return true;
 		case ptp_event_olympus_DevicePropChangedLegacy:
 		case ptp_event_olympus_DevicePropChanged:
+#ifndef USE_ICA_TRANSPORT
+			// do NOT refresh per event on the raw transport: a dial change floods
+			// C108 events while the body is unresponsive and every triggered
+			// GetDevicePropDesc burns a 10s timeout and wedges the pipe; the
+			// ChangedProperties checksum poll below refreshes all mapped
+			// properties within ~2s and has wedge recovery
+			return true;
+#else
 			// param1 is the changed vendor property code
 			return ptp_handle_event(device, ptp_event_DevicePropChanged, params);
+#endif
 	}
 	return ptp_handle_event(device, code, params);
 }
@@ -424,18 +433,33 @@ static void ptp_olympus_check_event(indigo_device *device) {
 				};
 				for (int i = 0; core_properties[i]; i++) {
 					ptp_property *property = ptp_property_supported(device, core_properties[i]);
-					if (property && ptp_refresh_property(device, property)) {
-						ptp_olympus_fix_property(device, property);
-						ptp_update_property(device, property);
+					if (property) {
+						if (ptp_refresh_property(device, property)) {
+							ptp_olympus_fix_property(device, property);
+							ptp_update_property(device, property);
+						} else {
+							// the camera went unresponsive mid-refresh (dial change) -
+							// stop asking immediately instead of burning a timeout per
+							// property, re-refresh after the recovery below
+							ok = false;
+							OLYMPUS_PRIVATE_DATA->last_changed_checksum = 0;
+							break;
+						}
 					}
 				}
-				if (size == sizeof(uint32_t) + count * sizeof(uint16_t) && count <= PTP_MAX_ELEMENTS) {
+				if (ok && size == sizeof(uint32_t) + count * sizeof(uint16_t) && count <= PTP_MAX_ELEMENTS) {
 					for (uint32_t i = 0; i < count; i++) {
 						uint16_t property_code = 0;
 						source = ptp_decode_uint16(source, &property_code);
 						ptp_property *property = ptp_property_supported(device, property_code);
-						if (property && ptp_refresh_property(device, property)) {
-							ptp_update_property(device, property);
+						if (property) {
+							if (ptp_refresh_property(device, property)) {
+								ptp_update_property(device, property);
+							} else {
+								ok = false;
+								OLYMPUS_PRIVATE_DATA->last_changed_checksum = 0;
+								break;
+							}
 						}
 					}
 				}
