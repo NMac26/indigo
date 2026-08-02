@@ -428,18 +428,32 @@ bool ptp_olympus_initialise(indigo_device *device) {
 		free(buffer);
 		buffer = NULL;
 	}
-	// the OM Capture application reads the storage ids before switching to PC control
-	// mode, some bodies seem to depend on that order (libgphoto2 camera_init)
+	// the OM Capture application reads the storage ids and the first storage info
+	// before switching to PC control mode, some bodies seem to depend on that
+	// order (libgphoto2 camera_init)
+	uint32_t first_storage = 0;
 	if (ptp_transaction_0_0_i(device, ptp_operation_GetStorageIDs, &buffer, &size)) {
 		uint32_t count = 0;
-		if (buffer && size >= sizeof(uint32_t)) {
-			ptp_decode_uint32(buffer, &count);
+		if (buffer && size >= 2 * sizeof(uint32_t)) {
+			uint8_t *source = ptp_decode_uint32(buffer, &count);
+			if (count > 0) {
+				ptp_decode_uint32(source, &first_storage);
+			}
 		}
 		INDIGO_DRIVER_LOG(DRIVER_NAME, "ptp_operation_GetStorageIDs: %d storage(s)", count);
 	}
 	if (buffer) {
 		free(buffer);
 		buffer = NULL;
+	}
+	if (first_storage) {
+		if (ptp_transaction_1_0_i(device, ptp_operation_GetStorageInfo, first_storage, &buffer, &size)) {
+			INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetStorageInfo(%08x): %d bytes", first_storage, size);
+		}
+		if (buffer) {
+			free(buffer);
+			buffer = NULL;
+		}
 	}
 	// touch the filesystem before init_pc_mode "as the Olympus app does"
 	// (libgphoto2 camera_init lists the root folders before ptp_olympus_init_pc_mode)
@@ -480,17 +494,32 @@ bool ptp_olympus_initialise(indigo_device *device) {
 #ifndef USE_ICA_TRANSPORT
 	if (!switched) {
 		// a genuine mode change makes the OM-1 reset its PTP stack and confirm via
-		// a C108 event without ever sending the response container, wedging the
-		// bulk pipe; recover with a class Device Reset and a fresh session the way
-		// libgphoto2 does, then verify the mode actually changed
+		// a C108 event without ever sending the response container, and the body
+		// keeps transitioning for a while afterwards - requests fired into that
+		// window are swallowed and wedge the bulk pipe again; recover with a class
+		// Device Reset plus a fresh session and poll GetDeviceInfo until the
+		// camera answers, resetting again between attempts
 		INDIGO_DRIVER_LOG(DRIVER_NAME, "recovering from mode switch with PTP device reset");
-		ptp_device_reset(device);
-		indigo_usleep(100000);
-		PRIVATE_DATA->transaction_id = 0;
-		if (!ptp_transaction_1_1(device, ptp_operation_OpenSession, 1, &PRIVATE_DATA->session_id)) {
-			INDIGO_DRIVER_LOG(DRIVER_NAME, "reopen session failed (%04x)", PRIVATE_DATA->last_error);
+		bool responsive = false;
+		for (int attempt = 0; attempt < 3 && !responsive; attempt++) {
+			ptp_device_reset(device);
+			indigo_usleep(1000000);
+			PRIVATE_DATA->transaction_id = 0;
+			if (!ptp_transaction_1_1(device, ptp_operation_OpenSession, 1, &PRIVATE_DATA->session_id)) {
+				INDIGO_DRIVER_LOG(DRIVER_NAME, "reopen session failed (%04x)", PRIVATE_DATA->last_error);
+				continue;
+			}
+			indigo_usleep(1000000);
+			if (ptp_transaction_0_0_i(device, ptp_operation_GetDeviceInfo, &buffer, &size)) {
+				responsive = true;
+				INDIGO_DRIVER_LOG(DRIVER_NAME, "camera responsive again after mode switch (attempt %d)", attempt + 1);
+			}
+			if (buffer) {
+				free(buffer);
+				buffer = NULL;
+			}
 		}
-		if (ptp_transaction_1_0_i(device, ptp_operation_GetDevicePropValue, ptp_property_olympus_CameraControlMode, &buffer, &size)) {
+		if (responsive && ptp_transaction_1_0_i(device, ptp_operation_GetDevicePropValue, ptp_property_olympus_CameraControlMode, &buffer, &size)) {
 			uint16_t mode = 0;
 			if (buffer && size >= sizeof(uint16_t)) {
 				ptp_decode_uint16(buffer, &mode);
