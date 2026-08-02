@@ -480,82 +480,26 @@ bool ptp_olympus_initialise(indigo_device *device) {
 		free(buffer);
 		buffer = NULL;
 	}
+#ifdef USE_ICA_TRANSPORT
 	// switch to PC control mode (libgphoto2 ptp_olympus_init_pc_mode), non-fatal so
 	// that a failed run still produces the device info dump needed for bring-up
 	uint16_t value = OLYMPUS_CAMERA_CONTROL_MODE_PC;
-	bool switched = ptp_transaction_0_1_o(device, ptp_operation_SetDevicePropValue, ptp_property_olympus_CameraControlMode, &value, sizeof(uint16_t));
-	if (switched) {
+	if (ptp_transaction_0_1_o(device, ptp_operation_SetDevicePropValue, ptp_property_olympus_CameraControlMode, &value, sizeof(uint16_t))) {
 		INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set to PC control");
 	} else {
 		INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set failed (%04x)", PRIVATE_DATA->last_error);
 	}
 	indigo_usleep(100000);
 	ptp_get_event(device);
-#ifndef USE_ICA_TRANSPORT
-	if (!switched) {
-		// a genuine mode change makes the OM-1 reset its PTP stack and confirm via
-		// a C108 event without ever sending the response container, and the body
-		// keeps transitioning for a while afterwards - requests fired into that
-		// window are swallowed and wedge the bulk pipe again; recover with a class
-		// Device Reset plus a fresh session and poll GetDeviceInfo until the
-		// camera answers, resetting again between attempts
-		INDIGO_DRIVER_LOG(DRIVER_NAME, "recovering from mode switch with PTP device reset");
-		bool responsive = false;
-		for (int attempt = 0; attempt < 3 && !responsive; attempt++) {
-			ptp_device_reset(device);
-			indigo_usleep(1000000);
-			PRIVATE_DATA->transaction_id = 0;
-			if (!ptp_transaction_1_1(device, ptp_operation_OpenSession, 1, &PRIVATE_DATA->session_id)) {
-				INDIGO_DRIVER_LOG(DRIVER_NAME, "reopen session failed (%04x)", PRIVATE_DATA->last_error);
-				continue;
-			}
-			indigo_usleep(1000000);
-			if (ptp_transaction_0_0_i(device, ptp_operation_GetDeviceInfo, &buffer, &size)) {
-				responsive = true;
-				INDIGO_DRIVER_LOG(DRIVER_NAME, "camera responsive again after mode switch (attempt %d)", attempt + 1);
-			}
-			if (buffer) {
-				free(buffer);
-				buffer = NULL;
-			}
-		}
-		// do NOT read the mode back here: once the OM-1 is in PC control mode it
-		// stops answering GetDevicePropValue (1015) and the query wedges the pipe
-		// again, and GetDevicePropDesc (1014) answers only for standard properties
-		// (5001/5011) until the vendor list is registered below
-		if (responsive) {
-			// register the vendor property list the way the OM Capture application
-			// does after switching modes: 9489 carries a count-prefixed uint16 code
-			// list (payload documented in libgphoto2 ptp.c ptp_olympus_init_pc_mode
-			// comments); without the registration the OM-1 does not answer
-			// GetDevicePropDesc for the d0xx range on the raw transport
-			if (ptp_transaction_0_0_i(device, ptp_operation_GetDeviceInfo, &buffer, &size)) {
-				ptp_decode_device_info(buffer, device);
-				uint8_t payload[sizeof(uint32_t) + PTP_MAX_ELEMENTS * sizeof(uint16_t)];
-				uint8_t *target = payload + sizeof(uint32_t);
-				uint32_t count = 0;
-				for (int i = 0; PRIVATE_DATA->info_properties_supported[i]; i++) {
-					uint16_t code = PRIVATE_DATA->info_properties_supported[i];
-					if (code >= 0xD000 && code <= 0xD3FF) {
-						target = ptp_encode_uint16(code, target);
-						count++;
-					}
-				}
-				ptp_encode_uint32(count, payload);
-				if (count > 0) {
-					if (ptp_transaction_0_0_o(device, ptp_operation_olympus_SetProperties, payload, (uint32_t)(target - payload))) {
-						INDIGO_DRIVER_LOG(DRIVER_NAME, "registered %d vendor properties", count);
-					} else {
-						INDIGO_DRIVER_LOG(DRIVER_NAME, "vendor property registration failed (%04x)", PRIVATE_DATA->last_error);
-					}
-				}
-			}
-			if (buffer) {
-				free(buffer);
-				buffer = NULL;
-			}
-		}
-	}
+#else
+	// do NOT write CameraControlMode on the raw transport: hardware testing shows
+	// the OM-1 acts on a genuine 2->1 switch and confirms it via a C108 event but
+	// never sends the response container, and in mode 1 it stops answering
+	// GetDevicePropValue entirely and GetDevicePropDesc for the whole d0xx vendor
+	// range (a 9489 property-list registration gets swallowed the same way); the
+	// body boots in mode 2 where every operation used below answers normally, so
+	// leave the mode alone (libgphoto2 also ignores its init_pc_mode result)
+	INDIGO_DRIVER_LOG(DRIVER_NAME, "leaving CameraControlMode unchanged");
 #endif
 	if (!ptp_initialise(device)) {
 		return false;
