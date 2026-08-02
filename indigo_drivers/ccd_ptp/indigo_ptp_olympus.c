@@ -519,17 +519,9 @@ bool ptp_olympus_initialise(indigo_device *device) {
 				buffer = NULL;
 			}
 		}
-		if (responsive && ptp_transaction_1_0_i(device, ptp_operation_GetDevicePropValue, ptp_property_olympus_CameraControlMode, &buffer, &size)) {
-			uint16_t mode = 0;
-			if (buffer && size >= sizeof(uint16_t)) {
-				ptp_decode_uint16(buffer, &mode);
-			}
-			INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode is now %04x", mode);
-		}
-		if (buffer) {
-			free(buffer);
-			buffer = NULL;
-		}
+		// do NOT read the mode back here: once the OM-1 is in PC control mode it
+		// stops answering GetDevicePropValue (1015) and the query wedges the pipe
+		// again; GetDevicePropDesc (1014), which ptp_initialise uses, still works
 	}
 #endif
 	if (!ptp_initialise(device)) {
