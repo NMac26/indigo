@@ -521,7 +521,40 @@ bool ptp_olympus_initialise(indigo_device *device) {
 		}
 		// do NOT read the mode back here: once the OM-1 is in PC control mode it
 		// stops answering GetDevicePropValue (1015) and the query wedges the pipe
-		// again; GetDevicePropDesc (1014), which ptp_initialise uses, still works
+		// again, and GetDevicePropDesc (1014) answers only for standard properties
+		// (5001/5011) until the vendor list is registered below
+		if (responsive) {
+			// register the vendor property list the way the OM Capture application
+			// does after switching modes: 9489 carries a count-prefixed uint16 code
+			// list (payload documented in libgphoto2 ptp.c ptp_olympus_init_pc_mode
+			// comments); without the registration the OM-1 does not answer
+			// GetDevicePropDesc for the d0xx range on the raw transport
+			if (ptp_transaction_0_0_i(device, ptp_operation_GetDeviceInfo, &buffer, &size)) {
+				ptp_decode_device_info(buffer, device);
+				uint8_t payload[sizeof(uint32_t) + PTP_MAX_ELEMENTS * sizeof(uint16_t)];
+				uint8_t *target = payload + sizeof(uint32_t);
+				uint32_t count = 0;
+				for (int i = 0; PRIVATE_DATA->info_properties_supported[i]; i++) {
+					uint16_t code = PRIVATE_DATA->info_properties_supported[i];
+					if (code >= 0xD000 && code <= 0xD3FF) {
+						target = ptp_encode_uint16(code, target);
+						count++;
+					}
+				}
+				ptp_encode_uint32(count, payload);
+				if (count > 0) {
+					if (ptp_transaction_0_0_o(device, ptp_operation_olympus_SetProperties, payload, (uint32_t)(target - payload))) {
+						INDIGO_DRIVER_LOG(DRIVER_NAME, "registered %d vendor properties", count);
+					} else {
+						INDIGO_DRIVER_LOG(DRIVER_NAME, "vendor property registration failed (%04x)", PRIVATE_DATA->last_error);
+					}
+				}
+			}
+			if (buffer) {
+				free(buffer);
+				buffer = NULL;
+			}
+		}
 	}
 #endif
 	if (!ptp_initialise(device)) {
