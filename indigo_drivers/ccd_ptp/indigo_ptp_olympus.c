@@ -414,14 +414,53 @@ static void ptp_olympus_check_event(indigo_device *device) {
 bool ptp_olympus_initialise(indigo_device *device) {
 	DSLR_MIRROR_LOCKUP_PROPERTY->hidden = true;
 	PRIVATE_DATA->vendor_private_data = indigo_safe_malloc(sizeof(olympus_private_data));
-	// the OM Capture application reads the storage ids before switching to PC control
-	// mode, some bodies seem to depend on that order (libgphoto2 camera_init)
+	// mirror the OM Capture / libgphoto2 camera_init preamble: the OM-1 acts on the
+	// CameraControlMode write but never sends its response container unless
+	// GetDeviceInfo and a storage/object enumeration happen first; on macOS the ICA
+	// stack performs that negotiation before the driver runs, on raw libusb the
+	// driver has to do it itself or the transaction stream wedges
 	void *buffer = NULL;
 	uint32_t size = 0;
+	if (ptp_transaction_0_0_i(device, ptp_operation_GetDeviceInfo, &buffer, &size)) {
+		INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetDeviceInfo: %d bytes", size);
+	}
+	if (buffer) {
+		free(buffer);
+		buffer = NULL;
+	}
+	// the OM Capture application reads the storage ids before switching to PC control
+	// mode, some bodies seem to depend on that order (libgphoto2 camera_init)
 	if (ptp_transaction_0_0_i(device, ptp_operation_GetStorageIDs, &buffer, &size)) {
 		uint32_t count = 0;
-		ptp_decode_uint32(buffer, &count);
+		if (buffer && size >= sizeof(uint32_t)) {
+			ptp_decode_uint32(buffer, &count);
+		}
 		INDIGO_DRIVER_LOG(DRIVER_NAME, "ptp_operation_GetStorageIDs: %d storage(s)", count);
+	}
+	if (buffer) {
+		free(buffer);
+		buffer = NULL;
+	}
+	// touch the filesystem before init_pc_mode "as the Olympus app does"
+	// (libgphoto2 camera_init lists the root folders before ptp_olympus_init_pc_mode)
+	if (ptp_transaction_3_0_i(device, ptp_operation_GetObjectHandles, 0xFFFFFFFF, 0, 0xFFFFFFFF, &buffer, &size)) {
+		uint32_t count = 0;
+		if (buffer && size >= sizeof(uint32_t)) {
+			ptp_decode_uint32(buffer, &count);
+		}
+		INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetObjectHandles: %d root object(s)", count);
+	}
+	if (buffer) {
+		free(buffer);
+		buffer = NULL;
+	}
+	// read the current control mode before writing it (libgphoto2 ptp_olympus_init_pc_mode)
+	if (ptp_transaction_1_0_i(device, ptp_operation_GetDevicePropValue, ptp_property_olympus_CameraControlMode, &buffer, &size)) {
+		uint16_t mode = 0;
+		if (buffer && size >= sizeof(uint16_t)) {
+			ptp_decode_uint16(buffer, &mode);
+		}
+		INDIGO_DRIVER_DEBUG(DRIVER_NAME, "CameraControlMode was %04x", mode);
 	}
 	if (buffer) {
 		free(buffer);
