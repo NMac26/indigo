@@ -16,9 +16,6 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// version history
-// 2.0 by Nathaniel Macias <nathaniel.c.macias@gmail.com>
-
 /** INDIGO PTP Olympus/OM System implementation
  \file indigo_ptp_olympus.c
  */
