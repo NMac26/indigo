@@ -340,6 +340,37 @@ bool ptp_olympus_handle_event(indigo_device *device, ptp_event_code code, uint32
 	return ptp_handle_event(device, code, params);
 }
 
+#ifndef USE_ICA_TRANSPORT
+static bool ptp_olympus_recover(indigo_device *device) {
+	// the OM-1 swallows requests fired while it is transitioning (mode switch,
+	// dial change) and the abandoned transaction wedges the bulk pipe; recover
+	// with a class Device Reset plus a fresh session and poll GetDeviceInfo
+	// until the camera answers again
+	INDIGO_DRIVER_LOG(DRIVER_NAME, "recovering wedged PTP pipe with device reset");
+	for (int attempt = 0; attempt < 3; attempt++) {
+		ptp_device_reset(device);
+		indigo_usleep(1000000);
+		PRIVATE_DATA->transaction_id = 0;
+		if (!ptp_transaction_1_1(device, ptp_operation_OpenSession, 1, &PRIVATE_DATA->session_id)) {
+			INDIGO_DRIVER_LOG(DRIVER_NAME, "reopen session failed (%04x)", PRIVATE_DATA->last_error);
+			continue;
+		}
+		indigo_usleep(1000000);
+		void *buffer = NULL;
+		uint32_t size = 0;
+		bool responsive = ptp_transaction_0_0_i(device, ptp_operation_GetDeviceInfo, &buffer, &size);
+		if (buffer) {
+			free(buffer);
+		}
+		if (responsive) {
+			INDIGO_DRIVER_LOG(DRIVER_NAME, "camera responsive again (attempt %d)", attempt + 1);
+			return true;
+		}
+	}
+	return false;
+}
+#endif
+
 static void ptp_olympus_check_event(indigo_device *device) {
 #ifdef USE_ICA_TRANSPORT
 	ptp_get_event(device);
@@ -364,7 +395,8 @@ static void ptp_olympus_check_event(indigo_device *device) {
 	if (ptp_operation_supported(device, ptp_operation_olympus_ChangedProperties)) {
 		void *buffer = NULL;
 		uint32_t size = 0;
-		if (ptp_transaction_0_0_i(device, ptp_operation_olympus_ChangedProperties, &buffer, &size) && buffer && size >= sizeof(uint32_t)) {
+		bool ok = ptp_transaction_0_0_i(device, ptp_operation_olympus_ChangedProperties, &buffer, &size);
+		if (ok && buffer && size >= sizeof(uint32_t)) {
 			uint32_t count = 0;
 			uint8_t *source = ptp_decode_uint32(buffer, &count);
 			// the payload is a count-prefixed dump of all vendor property descriptors
@@ -412,6 +444,13 @@ static void ptp_olympus_check_event(indigo_device *device) {
 		if (buffer) {
 			free(buffer);
 		}
+#ifndef USE_ICA_TRANSPORT
+		if (!ok && IS_CONNECTED && !PRIVATE_DATA->abort_capture) {
+			// a refresh fired into a camera-side transition (dial change) wedges
+			// the pipe - recover instead of leaving the connection dead
+			ptp_olympus_recover(device);
+		}
+#endif
 	}
 	if (IS_CONNECTED) {
 		indigo_reschedule_timer(device, 1, &PRIVATE_DATA->event_checker);
@@ -539,32 +578,11 @@ bool ptp_olympus_initialise(indigo_device *device) {
 	ptp_get_event(device);
 #ifndef USE_ICA_TRANSPORT
 	if (!switched) {
-		// a genuine mode change can make the OM-1 reset its PTP stack and confirm
-		// via a C108 event without ever sending the response container, and the
-		// body keeps transitioning for a while afterwards; recover with a class
-		// Device Reset plus a fresh session and poll GetDeviceInfo until the
-		// camera answers again (do NOT query GetDevicePropValue here - the OM-1
-		// stops answering 1015 in PC control mode and the query wedges the pipe)
-		INDIGO_DRIVER_LOG(DRIVER_NAME, "recovering from mode switch with PTP device reset");
-		bool responsive = false;
-		for (int attempt = 0; attempt < 3 && !responsive; attempt++) {
-			ptp_device_reset(device);
-			indigo_usleep(1000000);
-			PRIVATE_DATA->transaction_id = 0;
-			if (!ptp_transaction_1_1(device, ptp_operation_OpenSession, 1, &PRIVATE_DATA->session_id)) {
-				INDIGO_DRIVER_LOG(DRIVER_NAME, "reopen session failed (%04x)", PRIVATE_DATA->last_error);
-				continue;
-			}
-			indigo_usleep(1000000);
-			if (ptp_transaction_0_0_i(device, ptp_operation_GetDeviceInfo, &buffer, &size)) {
-				responsive = true;
-				INDIGO_DRIVER_LOG(DRIVER_NAME, "camera responsive again after mode switch (attempt %d)", attempt + 1);
-			}
-			if (buffer) {
-				free(buffer);
-				buffer = NULL;
-			}
-		}
+		// a genuine mode change makes the OM-1 drop the response container and
+		// confirm via a C108 event instead; do NOT query GetDevicePropValue
+		// afterwards - the OM-1 stops answering 1015 in PC control mode and the
+		// query wedges the pipe
+		ptp_olympus_recover(device);
 	}
 #endif
 	indigo_set_timer(device, 0.5, ptp_olympus_check_event, &PRIVATE_DATA->event_checker);
