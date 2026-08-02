@@ -1221,6 +1221,7 @@ bool ptp_open(indigo_device *device) {
 //	}
 	if (rc >= 0 && interface) {
 		int interface_number = interface->altsetting->bInterfaceNumber;
+		PRIVATE_DATA->iface = interface_number;
 		for (int i = 0; i < 5; i++) {
 			rc = libusb_claim_interface(handle, interface_number);
 			INDIGO_DRIVER_DEBUG(DRIVER_NAME, "libusb_claim_interface(%d) -> %s", interface_number, rc < 0 ? libusb_error_name(rc) : "OK");
@@ -1423,6 +1424,17 @@ bool ptp_get_event(indigo_device *device) {
 	pthread_mutex_unlock(&PRIVATE_DATA->usb_mutex);
 	PRIVATE_DATA->handle_event(device, event.code, event.payload.params);
 	return true;
+}
+
+bool ptp_device_reset(indigo_device *device) {
+	// PIMA 15740 class-specific Device Reset request, returns the camera's PTP
+	// stack to the idle state when a transaction is stuck (the equivalent of
+	// libgphoto2's ptp_usb_control_device_reset_request)
+	pthread_mutex_lock(&PRIVATE_DATA->usb_mutex);
+	int rc = libusb_control_transfer(PRIVATE_DATA->handle, LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE, 0x66, 0, PRIVATE_DATA->iface, NULL, 0, PTP_TIMEOUT);
+	INDIGO_DRIVER_DEBUG(DRIVER_NAME, "libusb_control_transfer(DEVICE_RESET) -> %s", rc < 0 ? libusb_error_name(rc) : "OK");
+	pthread_mutex_unlock(&PRIVATE_DATA->usb_mutex);
+	return rc >= 0;
 }
 
 void ptp_close(indigo_device *device) {

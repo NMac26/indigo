@@ -469,13 +469,40 @@ bool ptp_olympus_initialise(indigo_device *device) {
 	// switch to PC control mode (libgphoto2 ptp_olympus_init_pc_mode), non-fatal so
 	// that a failed run still produces the device info dump needed for bring-up
 	uint16_t value = OLYMPUS_CAMERA_CONTROL_MODE_PC;
-	if (ptp_transaction_0_1_o(device, ptp_operation_SetDevicePropValue, ptp_property_olympus_CameraControlMode, &value, sizeof(uint16_t))) {
+	bool switched = ptp_transaction_0_1_o(device, ptp_operation_SetDevicePropValue, ptp_property_olympus_CameraControlMode, &value, sizeof(uint16_t));
+	if (switched) {
 		INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set to PC control");
 	} else {
 		INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set failed (%04x)", PRIVATE_DATA->last_error);
 	}
 	indigo_usleep(100000);
 	ptp_get_event(device);
+#ifndef USE_ICA_TRANSPORT
+	if (!switched) {
+		// a genuine mode change makes the OM-1 reset its PTP stack and confirm via
+		// a C108 event without ever sending the response container, wedging the
+		// bulk pipe; recover with a class Device Reset and a fresh session the way
+		// libgphoto2 does, then verify the mode actually changed
+		INDIGO_DRIVER_LOG(DRIVER_NAME, "recovering from mode switch with PTP device reset");
+		ptp_device_reset(device);
+		indigo_usleep(100000);
+		PRIVATE_DATA->transaction_id = 0;
+		if (!ptp_transaction_1_1(device, ptp_operation_OpenSession, 1, &PRIVATE_DATA->session_id)) {
+			INDIGO_DRIVER_LOG(DRIVER_NAME, "reopen session failed (%04x)", PRIVATE_DATA->last_error);
+		}
+		if (ptp_transaction_1_0_i(device, ptp_operation_GetDevicePropValue, ptp_property_olympus_CameraControlMode, &buffer, &size)) {
+			uint16_t mode = 0;
+			if (buffer && size >= sizeof(uint16_t)) {
+				ptp_decode_uint16(buffer, &mode);
+			}
+			INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode is now %04x", mode);
+		}
+		if (buffer) {
+			free(buffer);
+			buffer = NULL;
+		}
+	}
+#endif
 	if (!ptp_initialise(device)) {
 		return false;
 	}
