@@ -137,6 +137,8 @@ static void populate_list(indigo_device *device) {
 	}
 }
 
+static void process_configuration_property(indigo_device *device);
+
 static void load_configuration(indigo_device *device) {
 	// request deselect everything from all agents first
 	indigo_update_property(device, AGENT_CONFIG_LOAD_PROPERTY, "Unloading current configuration, please wait...");
@@ -226,21 +228,20 @@ static void load_configuration(indigo_device *device) {
 				indigo_uni_close(&handle);
 				free(context);
 				free(client);
-				// wait for all the changes to be applied
-				indigo_usleep(500000);
-				bool done = false;
-				while (!done) {
-					done = true;
+				// apply all queued restore properties directly - they are scheduled
+				// with indigo_execute_handler() on this device's serialized handler
+				// queue, behind this very handler, so waiting for them here would
+				// deadlock and leave the load busy forever
+				bool pending = true;
+				while (pending) {
+					process_configuration_property(device);
+					pending = false;
 					for (int j = 0; j < DEVICE_PRIVATE_DATA->restore_count; j++) {
 						if (DEVICE_PRIVATE_DATA->restore_properties[j]) {
-							done = false;
+							pending = true;
 							break;
 						}
 					}
-					if (done) {
-						break;
-					}
-					indigo_usleep(100000);
 				}
 				strncpy(AGENT_CONFIG_LAST_CONFIG_NAME_ITEM->text.value, item->name, INDIGO_NAME_SIZE);
 			}
