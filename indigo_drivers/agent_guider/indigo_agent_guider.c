@@ -1828,11 +1828,10 @@ static bool guide(indigo_device *device) {
 			} else if (AGENT_GUIDER_CORRECTION_MODE_RA_LINEAR_TREND_ITEM->sw.value) {
 				correction_ra = indigo_guider_linear_trend_response(AGENT_GUIDER_SETTINGS_LINEAR_TREND_AGG_RA_ITEM->number.value / 100, min_error, drift_ra, &DEVICE_PRIVATE_DATA->trend_ra);
 			} else if (AGENT_GUIDER_CORRECTION_MODE_RA_PPEC_ITEM->sw.value && DEVICE_PRIVATE_DATA->ppec_ra != NULL) {
-				/* Predictive PEC (Gaussian Process). It has its own reactive gain;
-				   min error is the shared min move. With period 0 the worm period
-				   is always estimated online; with a fixed period > 0 the estimate
-				   is still refined (allowed to drift) unless the fixed-period item
-				   is set, in which case the period is held constant. */
+				/* With period 0 the worm period is estimated online from the default;
+				   with a fixed period > 0 the estimate is still refined (allowed to drift)
+				   unless the fixed-period item is set, in which case it is held constant.
+				 */
 				double period = AGENT_GUIDER_SETTINGS_PPEC_PERIOD_RA_ITEM->number.value;
 				bool period_fixed = AGENT_GUIDER_SETTINGS_PPEC_PERIOD_FIXED_RA_ITEM->number.value > 0.5;
 				indigo_gp_guider_set_parameters(
@@ -2368,7 +2367,7 @@ static indigo_result agent_device_attach(indigo_device *device) {
 		indigo_init_number_item(AGENT_GUIDER_SETTINGS_PPEC_REACTIVE_GAIN_RA_ITEM, AGENT_GUIDER_SETTINGS_PPEC_REACTIVE_GAIN_RA_ITEM_NAME, "RA PPEC reactive gain (%)", 0, 100, 5, 60);
 		indigo_init_number_item(AGENT_GUIDER_SETTINGS_PPEC_PRED_GAIN_RA_ITEM, AGENT_GUIDER_SETTINGS_PPEC_PRED_GAIN_RA_ITEM_NAME, "RA PPEC predictive gain (%)", 0, 100, 5, 50);
 		indigo_init_number_item(AGENT_GUIDER_SETTINGS_PPEC_PERIOD_RA_ITEM, AGENT_GUIDER_SETTINGS_PPEC_PERIOD_RA_ITEM_NAME, "RA PPEC period (s, 0=auto)", 0, 2000, 10, 0);
-		indigo_init_number_item(AGENT_GUIDER_SETTINGS_PPEC_PERIOD_FIXED_RA_ITEM, AGENT_GUIDER_SETTINGS_PPEC_PERIOD_FIXED_RA_ITEM_NAME, "RA PPEC fixed period, no drift (0=no, 1=yes)", 0, 1, 1, 0);
+		indigo_init_number_item(AGENT_GUIDER_SETTINGS_PPEC_PERIOD_FIXED_RA_ITEM, AGENT_GUIDER_SETTINGS_PPEC_PERIOD_FIXED_RA_ITEM_NAME, "RA PPEC fixed period (0=auto-adjust, 1=fixed)", 0, 1, 1, 0);
 		indigo_init_number_item(AGENT_GUIDER_SETTINGS_PPEC_RETAIN_MODEL_RA_ITEM, AGENT_GUIDER_SETTINGS_PPEC_RETAIN_MODEL_RA_ITEM_NAME, "RA PPEC retain model (% of period)", 0, 80, 5, PPEC_RETAIN_MODEL_PCT);
 		// -------------------------------------------------------------------------------- FLIP_REVERSE_DEC
 		AGENT_GUIDER_FLIP_REVERSES_DEC_PROPERTY = indigo_init_switch_property(NULL, device->name, AGENT_GUIDER_FLIP_REVERSES_DEC_PROPERTY_NAME, "Agent", "Reverse Dec speed after meridian flip", INDIGO_OK_STATE, INDIGO_RW_PERM, INDIGO_ONE_OF_MANY_RULE, 2);
@@ -2938,6 +2937,9 @@ static indigo_result agent_change_property(indigo_device *device, indigo_client 
 
 static indigo_result agent_device_detach(indigo_device *device) {
 	assert(device != NULL);
+	/* abort a running process before waiting for the timers to finish, otherwise
+	   indigo_cancel_all_timers() deadlocks on the guiding loop, which never ends by itself */
+	AGENT_ABORT_PROCESS_PROPERTY->state = INDIGO_BUSY_STATE;
 	indigo_cancel_pending_handlers(device);
 	indigo_cancel_all_timers(device);
 	save_config(device);
