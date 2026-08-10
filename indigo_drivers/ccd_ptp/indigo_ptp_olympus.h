@@ -72,6 +72,7 @@ typedef enum {
 typedef struct {
 	bool is_dual_compression;
 	uint32_t last_changed_checksum;
+	int forced_refresh_countdown;
 	char last_object_name[256];
 	uint32_t last_object_size;
 } olympus_private_data;

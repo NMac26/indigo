@@ -422,6 +422,14 @@ static void ptp_olympus_check_event(indigo_device *device) {
 	}
 #endif
 	if (!transition && ptp_operation_supported(device, ptp_operation_olympus_ChangedProperties)) {
+		if (--OLYMPUS_PRIVATE_DATA->forced_refresh_countdown <= 0) {
+			// some dial moves (still <-> movie after the first round trip) emit
+			// no events and leave the ChangedProperties dump byte-identical, so
+			// the checksum gate alone would keep the controls stale forever -
+			// periodically force a live descriptor refresh to bound that
+			OLYMPUS_PRIVATE_DATA->forced_refresh_countdown = 10;
+			OLYMPUS_PRIVATE_DATA->last_changed_checksum = 0;
+		}
 		void *buffer = NULL;
 		uint32_t size = 0;
 		bool ok = ptp_transaction_0_0_i(device, ptp_operation_olympus_ChangedProperties, &buffer, &size);
