@@ -359,6 +359,18 @@ static bool ptp_olympus_recover(indigo_device *device) {
 	for (int attempt = 0; attempt < 3; attempt++) {
 		ptp_device_reset(device);
 		indigo_usleep(1000000);
+		// flush the interrupt queue before reopening - the camera keeps
+		// queueing events while the bulk pipe is dead and holds off bulk
+		// responses until the backlog is drained
+		for (int i = 0; i < 16; i++) {
+			ptp_container event;
+			int length = 0;
+			memset(&event, 0, sizeof(event));
+			if (libusb_bulk_transfer(PRIVATE_DATA->handle, PRIVATE_DATA->ep_int, (unsigned char *)&event, sizeof(event), &length, 100) < 0 || length == 0) {
+				break;
+			}
+			PTP_DUMP_CONTAINER(&event);
+		}
 		PRIVATE_DATA->transaction_id = 0;
 		if (!ptp_transaction_1_1(device, ptp_operation_OpenSession, 1, &PRIVATE_DATA->session_id)) {
 			INDIGO_DRIVER_LOG(DRIVER_NAME, "reopen session failed (%04x)", PRIVATE_DATA->last_error);
@@ -381,6 +393,7 @@ static bool ptp_olympus_recover(indigo_device *device) {
 #endif
 
 static void ptp_olympus_check_event(indigo_device *device) {
+	bool transition = false;
 #ifdef USE_ICA_TRANSPORT
 	ptp_get_event(device);
 #else
@@ -398,10 +411,17 @@ static void ptp_olympus_check_event(indigo_device *device) {
 		}
 		INDIGO_DRIVER_DEBUG(DRIVER_NAME, "libusb_bulk_transfer() -> OK, %d", length);
 		PTP_DUMP_CONTAINER(&event);
+		if (event.code == ptp_event_olympus_DevicePropChanged || event.code == ptp_event_olympus_DevicePropChangedLegacy) {
+			// the camera is mid-transition (dial move, mode switch) - property
+			// descriptor requests fired now are silently swallowed and wedge
+			// the pipe, so postpone the refresh below to the first quiet tick;
+			// the stale checksum guarantees it happens
+			transition = true;
+		}
 		ptp_olympus_handle_event(device, event.code, event.payload.params);
 	}
 #endif
-	if (ptp_operation_supported(device, ptp_operation_olympus_ChangedProperties)) {
+	if (!transition && ptp_operation_supported(device, ptp_operation_olympus_ChangedProperties)) {
 		void *buffer = NULL;
 		uint32_t size = 0;
 		bool ok = ptp_transaction_0_0_i(device, ptp_operation_olympus_ChangedProperties, &buffer, &size);
