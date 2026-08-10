@@ -173,6 +173,14 @@ static void handle_connection(indigo_device *device) {
 					ptp_transaction_0_0(device, ptp_operation_CloseSession);
 					result = ptp_transaction_1_1(device, ptp_operation_OpenSession, 1, &PRIVATE_DATA->session_id);
 				}
+				if (!result) {
+					// a camera still holding a session from a dead host may ignore
+					// OpenSession instead of answering SessionAlreadyOpen; the class
+					// Device Reset request closes any open session (PIMA 15740)
+					ptp_device_reset(device);
+					PRIVATE_DATA->transaction_id = 0;
+					result = ptp_transaction_1_1(device, ptp_operation_OpenSession, 1, &PRIVATE_DATA->session_id);
+				}
 #endif
 				if (result) {
 					if (PRIVATE_DATA->initialise(device)) {

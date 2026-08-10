@@ -526,80 +526,107 @@ bool ptp_olympus_initialise(indigo_device *device) {
 	// driver has to do it itself or the transaction stream wedges
 	void *buffer = NULL;
 	uint32_t size = 0;
+	bool pc_mode_active = false;
 	if (ptp_transaction_0_0_i(device, ptp_operation_GetDeviceInfo, &buffer, &size)) {
 		INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetDeviceInfo: %d bytes", size);
+	}
+#ifndef USE_ICA_TRANSPORT
+	else if (!ptp_olympus_recover(device)) {
+		// a session left over from a dead server run can make the camera ignore
+		// requests; the device reset in the recovery closes it
+		return false;
+	}
+#endif
+	if (buffer) {
+		free(buffer);
+		buffer = NULL;
+	}
+#ifndef USE_ICA_TRANSPORT
+	// a previous server run also leaves the camera in PC control mode - d052
+	// reverts to 2 only on physical unplug - and there the filesystem preamble
+	// is pointless, the GetDevicePropValue d052 read wedges the pipe and the
+	// mode switch is already done; the mode is detectable by the
+	// ChangedProperties dump size, ~450 bytes in boot mode 2 vs ~10KB in mode 1
+	if (ptp_transaction_0_0_i(device, ptp_operation_olympus_ChangedProperties, &buffer, &size)) {
+		pc_mode_active = size > 4096;
 	}
 	if (buffer) {
 		free(buffer);
 		buffer = NULL;
 	}
+	if (pc_mode_active) {
+		INDIGO_DRIVER_LOG(DRIVER_NAME, "PC control mode already active, taking the reconnect fast path");
+	}
+#endif
 	// the OM Capture application reads the storage ids, each storage info and the
 	// root folder objects before switching to PC control mode - without that
 	// "filesystem initialisation" the OM-1 drops the response container of the
 	// mode switch (libgphoto2 camera_init notes the same requirement)
-	uint32_t storage_ids[8];
-	uint32_t storage_count = 0;
-	if (ptp_transaction_0_0_i(device, ptp_operation_GetStorageIDs, &buffer, &size)) {
-		uint32_t count = 0;
-		if (buffer && size >= sizeof(uint32_t)) {
-			uint8_t *source = ptp_decode_uint32(buffer, &count);
-			for (uint32_t i = 0; i < count && storage_count < 8 && sizeof(uint32_t) * (i + 2) <= size; i++) {
-				source = ptp_decode_uint32(source, storage_ids + storage_count);
-				storage_count++;
-			}
-		}
-		INDIGO_DRIVER_LOG(DRIVER_NAME, "ptp_operation_GetStorageIDs: %d storage(s)", count);
-	}
-	if (buffer) {
-		free(buffer);
-		buffer = NULL;
-	}
-	for (uint32_t i = 0; i < storage_count; i++) {
-		if (ptp_transaction_1_0_i(device, ptp_operation_GetStorageInfo, storage_ids[i], &buffer, &size)) {
-			INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetStorageInfo(%08x): %d bytes", storage_ids[i], size);
-		}
-		if (buffer) {
-			free(buffer);
-			buffer = NULL;
-		}
-		if (ptp_transaction_3_0_i(device, ptp_operation_GetObjectHandles, storage_ids[i], 0, 0xFFFFFFFF, &buffer, &size)) {
+	if (!pc_mode_active) {
+		uint32_t storage_ids[8];
+		uint32_t storage_count = 0;
+		if (ptp_transaction_0_0_i(device, ptp_operation_GetStorageIDs, &buffer, &size)) {
 			uint32_t count = 0;
-			uint8_t *source = NULL;
 			if (buffer && size >= sizeof(uint32_t)) {
-				source = ptp_decode_uint32(buffer, &count);
-			}
-			INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetObjectHandles(%08x): %d object(s)", storage_ids[i], count);
-			if (count > 16) {
-				count = 16;
-			}
-			for (uint32_t j = 0; j < count && sizeof(uint32_t) * (j + 2) <= size; j++) {
-				uint32_t handle = 0;
-				source = ptp_decode_uint32(source, &handle);
-				void *info = NULL;
-				if (ptp_transaction_1_0_i(device, ptp_operation_GetObjectInfo, handle, &info, NULL)) {
-					INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetObjectInfo(%08x)", handle);
-				}
-				if (info) {
-					free(info);
+				uint8_t *source = ptp_decode_uint32(buffer, &count);
+				for (uint32_t i = 0; i < count && storage_count < 8 && sizeof(uint32_t) * (i + 2) <= size; i++) {
+					source = ptp_decode_uint32(source, storage_ids + storage_count);
+					storage_count++;
 				}
 			}
+			INDIGO_DRIVER_LOG(DRIVER_NAME, "ptp_operation_GetStorageIDs: %d storage(s)", count);
 		}
 		if (buffer) {
 			free(buffer);
 			buffer = NULL;
 		}
-	}
-	// read the current control mode before writing it (libgphoto2 ptp_olympus_init_pc_mode)
-	if (ptp_transaction_1_0_i(device, ptp_operation_GetDevicePropValue, ptp_property_olympus_CameraControlMode, &buffer, &size)) {
-		uint16_t mode = 0;
-		if (buffer && size >= sizeof(uint16_t)) {
-			ptp_decode_uint16(buffer, &mode);
+		for (uint32_t i = 0; i < storage_count; i++) {
+			if (ptp_transaction_1_0_i(device, ptp_operation_GetStorageInfo, storage_ids[i], &buffer, &size)) {
+				INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetStorageInfo(%08x): %d bytes", storage_ids[i], size);
+			}
+			if (buffer) {
+				free(buffer);
+				buffer = NULL;
+			}
+			if (ptp_transaction_3_0_i(device, ptp_operation_GetObjectHandles, storage_ids[i], 0, 0xFFFFFFFF, &buffer, &size)) {
+				uint32_t count = 0;
+				uint8_t *source = NULL;
+				if (buffer && size >= sizeof(uint32_t)) {
+					source = ptp_decode_uint32(buffer, &count);
+				}
+				INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetObjectHandles(%08x): %d object(s)", storage_ids[i], count);
+				if (count > 16) {
+					count = 16;
+				}
+				for (uint32_t j = 0; j < count && sizeof(uint32_t) * (j + 2) <= size; j++) {
+					uint32_t handle = 0;
+					source = ptp_decode_uint32(source, &handle);
+					void *info = NULL;
+					if (ptp_transaction_1_0_i(device, ptp_operation_GetObjectInfo, handle, &info, NULL)) {
+						INDIGO_DRIVER_DEBUG(DRIVER_NAME, "pre-init GetObjectInfo(%08x)", handle);
+					}
+					if (info) {
+						free(info);
+					}
+				}
+			}
+			if (buffer) {
+				free(buffer);
+				buffer = NULL;
+			}
 		}
-		INDIGO_DRIVER_DEBUG(DRIVER_NAME, "CameraControlMode was %04x", mode);
-	}
-	if (buffer) {
-		free(buffer);
-		buffer = NULL;
+		// read the current control mode before writing it (libgphoto2 ptp_olympus_init_pc_mode)
+		if (ptp_transaction_1_0_i(device, ptp_operation_GetDevicePropValue, ptp_property_olympus_CameraControlMode, &buffer, &size)) {
+			uint16_t mode = 0;
+			if (buffer && size >= sizeof(uint16_t)) {
+				ptp_decode_uint16(buffer, &mode);
+			}
+			INDIGO_DRIVER_DEBUG(DRIVER_NAME, "CameraControlMode was %04x", mode);
+		}
+		if (buffer) {
+			free(buffer);
+			buffer = NULL;
+		}
 	}
 	// the mode switch itself happens AFTER ptp_initialise below: remote capture
 	// (9481) is accepted but ignored in the boot mode 2, so PC control mode is
@@ -626,24 +653,26 @@ bool ptp_olympus_initialise(indigo_device *device) {
 	}
 	// switch to PC control mode (libgphoto2 ptp_olympus_init_pc_mode) - the
 	// shutter only fires remotely in mode 1
-	uint16_t value = OLYMPUS_CAMERA_CONTROL_MODE_PC;
-	bool switched = ptp_transaction_0_1_o(device, ptp_operation_SetDevicePropValue, ptp_property_olympus_CameraControlMode, &value, sizeof(uint16_t));
-	if (switched) {
-		INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set to PC control");
-	} else {
-		INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set failed (%04x)", PRIVATE_DATA->last_error);
-	}
-	indigo_usleep(100000);
-	ptp_get_event(device);
+	if (!pc_mode_active) {
+		uint16_t value = OLYMPUS_CAMERA_CONTROL_MODE_PC;
+		bool switched = ptp_transaction_0_1_o(device, ptp_operation_SetDevicePropValue, ptp_property_olympus_CameraControlMode, &value, sizeof(uint16_t));
+		if (switched) {
+			INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set to PC control");
+		} else {
+			INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set failed (%04x)", PRIVATE_DATA->last_error);
+		}
+		indigo_usleep(100000);
+		ptp_get_event(device);
 #ifndef USE_ICA_TRANSPORT
-	if (!switched) {
-		// a genuine mode change makes the OM-1 drop the response container and
-		// confirm via a C108 event instead; do NOT query GetDevicePropValue
-		// afterwards - the OM-1 stops answering 1015 in PC control mode and the
-		// query wedges the pipe
-		ptp_olympus_recover(device);
-	}
+		if (!switched) {
+			// a genuine mode change makes the OM-1 drop the response container and
+			// confirm via a C108 event instead; do NOT query GetDevicePropValue
+			// afterwards - the OM-1 stops answering 1015 in PC control mode and the
+			// query wedges the pipe
+			ptp_olympus_recover(device);
+		}
 #endif
+	}
 	indigo_set_timer(device, 0.5, ptp_olympus_check_event, &PRIVATE_DATA->event_checker);
 	return true;
 }
