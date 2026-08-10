@@ -646,6 +646,10 @@ static indigo_device *attach_device(int vendor, int product, const char *usb_pat
 				private_data->set_host_time = ptp_set_host_time;
 				private_data->check_dual_compression = ptp_fuji_check_dual_compression;
 			} else if (vendor == OLYMPUS_VID || vendor == OM_SYSTEM_VID) {
+				// set before ptp_open so the very first OpenSession (and the
+				// stale-session device-reset fallback) already run at the short
+				// timeout; read only by the libusb transaction path
+				private_data->transaction_timeout = OLYMPUS_PTP_TIMEOUT;
 				private_data->operation_code_label = ptp_operation_olympus_code_label;
 				private_data->response_code_label = ptp_response_code_label;
 				private_data->event_code_label = ptp_event_olympus_code_label;

@@ -28,6 +28,10 @@
 // Olympus OMD vendor extension (also used by OM Digital Solutions bodies),
 // codes as documented by libgphoto2 camlibs/ptp2/ptp.h
 
+// the OM-1 answers every request within milliseconds or not at all, so the
+// stock 10s PTP_TIMEOUT only delays wedge detection and recovery (libusb only)
+#define OLYMPUS_PTP_TIMEOUT	3000
+
 typedef enum {
 	ptp_operation_olympus_Capture = 0x9481,
 	ptp_operation_olympus_GetDateTime = 0x9482,

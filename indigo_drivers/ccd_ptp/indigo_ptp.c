@@ -1177,7 +1177,11 @@ bool ptp_open(indigo_device *device) {
 	int rc = 0;
 	struct libusb_device_descriptor	device_descriptor;
 
-	PRIVATE_DATA->transaction_timeout = PTP_TIMEOUT;
+	if (PRIVATE_DATA->transaction_timeout == 0) {
+		// 0 would mean an infinite libusb timeout; vendors may preset a shorter
+		// value at attach time
+		PRIVATE_DATA->transaction_timeout = PTP_TIMEOUT;
+	}
 	libusb_device *dev = PRIVATE_DATA->dev;
 	rc = libusb_get_device_descriptor(dev, &device_descriptor);
 	INDIGO_DRIVER_DEBUG(DRIVER_NAME, "libusb_get_device_descriptor() -> %s", rc < 0 ? libusb_error_name(rc) : "OK");
@@ -1432,8 +1436,9 @@ bool ptp_device_reset(indigo_device *device) {
 	// stack to the idle state when a transaction is stuck (the equivalent of
 	// libgphoto2's ptp_usb_control_device_reset_request)
 	pthread_mutex_lock(&PRIVATE_DATA->usb_mutex);
-	int rc = libusb_control_transfer(PRIVATE_DATA->handle, LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE, 0x66, 0, PRIVATE_DATA->iface, NULL, 0, PTP_TIMEOUT);
+	int rc = libusb_control_transfer(PRIVATE_DATA->handle, LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE, 0x66, 0, PRIVATE_DATA->iface, NULL, 0, PRIVATE_DATA->transaction_timeout);
 	INDIGO_DRIVER_DEBUG(DRIVER_NAME, "libusb_control_transfer(DEVICE_RESET) -> %s", rc < 0 ? libusb_error_name(rc) : "OK");
+	PRIVATE_DATA->last_usb_error = rc < 0 ? rc : 0;
 	pthread_mutex_unlock(&PRIVATE_DATA->usb_mutex);
 	return rc >= 0;
 }

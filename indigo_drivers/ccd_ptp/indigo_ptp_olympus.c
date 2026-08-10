@@ -357,7 +357,10 @@ static bool ptp_olympus_recover(indigo_device *device) {
 	// until the camera answers again
 	INDIGO_DRIVER_LOG(DRIVER_NAME, "recovering wedged PTP pipe with device reset");
 	for (int attempt = 0; attempt < 3; attempt++) {
-		ptp_device_reset(device);
+		if (!ptp_device_reset(device) && PRIVATE_DATA->last_usb_error == LIBUSB_ERROR_NO_DEVICE) {
+			// the camera is physically gone - retrying cannot succeed
+			return false;
+		}
 		indigo_usleep(1000000);
 		// flush the interrupt queue before reopening - the camera keeps
 		// queueing events while the bulk pipe is dead and holds off bulk
@@ -505,7 +508,9 @@ static void ptp_olympus_check_event(indigo_device *device) {
 #endif
 	}
 	if (IS_CONNECTED) {
-		indigo_reschedule_timer(device, 1, &PRIVATE_DATA->event_checker);
+		// 2Hz halves the dial-change latency (event tick + quiet-tick refresh)
+		// and bounds silently changed modes at 5s via the forced refresh
+		indigo_reschedule_timer(device, 0.5, &PRIVATE_DATA->event_checker);
 	}
 }
 
@@ -513,11 +518,10 @@ bool ptp_olympus_initialise(indigo_device *device) {
 	DSLR_MIRROR_LOCKUP_PROPERTY->hidden = true;
 	PRIVATE_DATA->vendor_private_data = indigo_safe_malloc(sizeof(olympus_private_data));
 #ifndef USE_ICA_TRANSPORT
-	// the OM-1 answers every request within milliseconds or not at all - a
-	// request fired into a camera-side transition (dial change, mode switch) is
-	// silently dropped and only the wedge recovery brings the pipe back, so
-	// waiting the stock 10s per read just delays that recovery
-	PRIVATE_DATA->transaction_timeout = 3000;
+	// normally preset at attach time; kept here for any attach path that
+	// forgets - a request fired into a camera-side transition is silently
+	// dropped and waiting the stock 10s per read just delays the recovery
+	PRIVATE_DATA->transaction_timeout = OLYMPUS_PTP_TIMEOUT;
 #endif
 	// mirror the OM Capture / libgphoto2 camera_init preamble: the OM-1 acts on the
 	// CameraControlMode write but never sends its response container unless
@@ -655,15 +659,39 @@ bool ptp_olympus_initialise(indigo_device *device) {
 	// shutter only fires remotely in mode 1
 	if (!pc_mode_active) {
 		uint16_t value = OLYMPUS_CAMERA_CONTROL_MODE_PC;
+#ifndef USE_ICA_TRANSPORT
+		// a genuine 2->1 write is acted on but its response container is never
+		// sent, so waiting the full transaction timeout for it is pure dead
+		// time - the C108 confirm arrives within ~200ms
+		int saved_timeout = PRIVATE_DATA->transaction_timeout;
+		PRIVATE_DATA->transaction_timeout = 1000;
+#endif
 		bool switched = ptp_transaction_0_1_o(device, ptp_operation_SetDevicePropValue, ptp_property_olympus_CameraControlMode, &value, sizeof(uint16_t));
+#ifndef USE_ICA_TRANSPORT
+		PRIVATE_DATA->transaction_timeout = saved_timeout;
+#endif
 		if (switched) {
 			INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set to PC control");
 		} else {
 			INDIGO_DRIVER_LOG(DRIVER_NAME, "CameraControlMode set failed (%04x)", PRIVATE_DATA->last_error);
 		}
+#ifdef USE_ICA_TRANSPORT
 		indigo_usleep(100000);
 		ptp_get_event(device);
-#ifndef USE_ICA_TRANSPORT
+#else
+		// pick up the C108 mode-switch confirm with short reads - ptp_get_event
+		// would block on the interrupt endpoint for the full raw PTP_TIMEOUT if
+		// no event were queued
+		for (int i = 0; i < 16; i++) {
+			ptp_container event;
+			int length = 0;
+			memset(&event, 0, sizeof(event));
+			if (libusb_bulk_transfer(PRIVATE_DATA->handle, PRIVATE_DATA->ep_int, (unsigned char *)&event, sizeof(event), &length, 100) < 0 || length == 0) {
+				break;
+			}
+			PTP_DUMP_CONTAINER(&event);
+			ptp_olympus_handle_event(device, event.code, event.payload.params);
+		}
 		if (!switched) {
 			// a genuine mode change makes the OM-1 drop the response container and
 			// confirm via a C108 event instead; do NOT query GetDevicePropValue
