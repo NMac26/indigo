@@ -74,6 +74,7 @@ indigo_ptp_olympus.o: indigo_ptp_olympus.m  indigo_ptp_olympus.c
 
 $(DRIVER_EXECUTABLE): indigo_ccd_ptp_main.o $(DRIVER_A)
 	$(CC) -o $@ $^ $(LDFLAGS) -lindigo -framework IOKit -framework Cocoa
+	codesign --force --sign - --entitlements indigo_ccd_ptp.entitlements $@
 
 $(DRIVER_SO): $(DRIVER_A)
 	$(CC) -shared -o $@ $(FORCE_ALL_ON) $(DRIVER_A) $(FORCE_ALL_OFF) $(LDFLAGS) -lindigo -framework IOKit -framework Cocoa

@@ -48,6 +48,7 @@ ifeq ($(OS_DETECTED),Darwin)
 	install_name_tool -add_rpath @loader_path/../drivers $@
 	install_name_tool -change $(BUILD_LIB)/libindigo.dylib  @rpath/../lib/libindigo.dylib $@
 	install_name_tool -change $(INDIGO_ROOT)/$(BUILD_LIB)/libusb-1.0.dylib  @rpath/../lib/libusb-1.0.dylib $@
+	codesign --force --sign - --entitlements indigo_server.entitlements $@
 else
 	$(CC) $(CFLAGS) -o $@ indigo_server.o $(SIMULATOR_LIBS) $(LDFLAGS) -lz -lstdc++ -lindigo -lindigocat
 endif
