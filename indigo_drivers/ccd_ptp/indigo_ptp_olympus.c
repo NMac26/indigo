@@ -679,24 +679,28 @@ bool ptp_olympus_initialise(indigo_device *device) {
 		indigo_usleep(100000);
 		ptp_get_event(device);
 #else
-		// pick up the C108 mode-switch confirm with short reads - ptp_get_event
-		// would block on the interrupt endpoint for the full raw PTP_TIMEOUT if
-		// no event were queued
-		for (int i = 0; i < 16; i++) {
-			ptp_container event;
-			int length = 0;
-			memset(&event, 0, sizeof(event));
-			if (libusb_bulk_transfer(PRIVATE_DATA->handle, PRIVATE_DATA->ep_int, (unsigned char *)&event, sizeof(event), &length, 100) < 0 || length == 0) {
-				break;
-			}
-			PTP_DUMP_CONTAINER(&event);
-			ptp_olympus_handle_event(device, event.code, event.payload.params);
-		}
 		if (!switched) {
-			// a genuine mode change makes the OM-1 drop the response container and
-			// confirm via a C108 event instead; do NOT query GetDevicePropValue
-			// afterwards - the OM-1 stops answering 1015 in PC control mode and the
-			// query wedges the pipe
+			// a genuine mode change makes the OM-1 drop the response container
+			// and confirm via a C108 event ~1.5-3s after the write; recovering
+			// before that confirm lands inside the transition window where even
+			// the reset/OpenSession get swallowed (costing a full failed
+			// attempt), so wait for the confirm - or give up after 3.5s - first
+			bool confirmed = false;
+			for (int i = 0; i < 35 && !confirmed; i++) {
+				ptp_container event;
+				int length = 0;
+				memset(&event, 0, sizeof(event));
+				if (libusb_bulk_transfer(PRIVATE_DATA->handle, PRIVATE_DATA->ep_int, (unsigned char *)&event, sizeof(event), &length, 100) < 0 || length == 0) {
+					continue;
+				}
+				PTP_DUMP_CONTAINER(&event);
+				if (event.code == ptp_event_olympus_DevicePropChanged || event.code == ptp_event_olympus_DevicePropChangedLegacy) {
+					confirmed = true;
+				}
+				ptp_olympus_handle_event(device, event.code, event.payload.params);
+			}
+			// do NOT query GetDevicePropValue afterwards - the OM-1 stops
+			// answering 1015 in PC control mode and the query wedges the pipe
 			ptp_olympus_recover(device);
 		}
 #endif
