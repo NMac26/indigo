@@ -355,6 +355,7 @@ typedef struct {
 	libusb_device_handle *handle;
 	uint8_t ep_in, ep_out, ep_int;
 	uint8_t iface;
+	int transaction_timeout;
 	indigo_property *dslr_delete_image_property;
 	indigo_property *dslr_mirror_lockup_property;
 	indigo_property *dslr_zoom_preview_property;

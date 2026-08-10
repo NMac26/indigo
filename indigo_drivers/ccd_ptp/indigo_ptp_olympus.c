@@ -484,6 +484,13 @@ static void ptp_olympus_check_event(indigo_device *device) {
 bool ptp_olympus_initialise(indigo_device *device) {
 	DSLR_MIRROR_LOCKUP_PROPERTY->hidden = true;
 	PRIVATE_DATA->vendor_private_data = indigo_safe_malloc(sizeof(olympus_private_data));
+#ifndef USE_ICA_TRANSPORT
+	// the OM-1 answers every request within milliseconds or not at all - a
+	// request fired into a camera-side transition (dial change, mode switch) is
+	// silently dropped and only the wedge recovery brings the pipe back, so
+	// waiting the stock 10s per read just delays that recovery
+	PRIVATE_DATA->transaction_timeout = 3000;
+#endif
 	// mirror the OM Capture / libgphoto2 camera_init preamble: the OM-1 acts on the
 	// CameraControlMode write but never sends its response container unless
 	// GetDeviceInfo and a storage/object enumeration happen first; on macOS the ICA
