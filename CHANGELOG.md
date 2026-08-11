@@ -175,7 +175,6 @@ All notable changes to INDIGO framework will be documented in this file.
 
 -indigo_ccd_ptp:
 	- fix double free crash
-	- OM System OM-1 / OM-1 Mark II support added (alpha, Olympus OMD extension)
 
 - indigo_focuser_qhy:
 	- add qhy_focuser_simulator

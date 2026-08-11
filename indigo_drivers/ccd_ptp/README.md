@@ -1,6 +1,6 @@
 # PTP (ISO15740:2000) DSLR driver
 
-PTP driver can handle multiple DSLR or mirrorless cameras using PTP-over-USB protocol. It supports generic PTP protocol and its Nikon, Canon, Sony, Fuji and Olympus/OM System extensions (Olympus/OM System support is alpha).
+PTP driver can handle multiple DSLR or mirrorless cameras using PTP-over-USB protocol. It supports generic PTP protocol and its Nikon, Canon, Sony, Fuji and Olympus/OM System extensions.
 
 It is a multiplatform replacement for platform dependent gPhoto2 and ICA drivers.
 
