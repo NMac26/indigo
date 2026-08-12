@@ -84,8 +84,12 @@ char *ptp_property_olympus_code_name(uint16_t code) {
 		case ptp_property_olympus_ExposureMeteringMode: return DSLR_EXPOSURE_METERING_PROPERTY_NAME;
 		case ptp_property_olympus_ISO: return DSLR_ISO_PROPERTY_NAME;
 		case ptp_property_olympus_ISOSensitivity: return DSLR_ISO_PROPERTY_NAME;
-		// d00c is a coarse still/movie state register, not a mode selector (the OM-1
-		// does not export the P/A/S/M dial position at all), keep it out of the UI
+		// d00c is a coarse still/movie state register, not a mode selector; the
+		// real dial lives in d006 (read-only enum 1/2/3/4/8/11 = M/P/A/S/Movie/B,
+		// hardware-verified) but that register only answers in PC control mode
+		// and is absent from the boot-mode property list, so it cannot be
+		// enumerated the normal way - candidate future improvement; the P/A/S/M
+		// subset is covered by the injected ExposureProgramMode below
 		case ptp_property_olympus_ExposureProgram: return "ADV_CameraState";
 		case ptp_property_olympus_ExposureBias: return DSLR_EXPOSURE_COMPENSATION_PROPERTY_NAME;
 		case ptp_property_olympus_DriveMode: return DSLR_CAPTURE_MODE_PROPERTY_NAME;
@@ -148,11 +152,14 @@ char *ptp_property_olympus_value_code_label(indigo_device *device, uint16_t prop
 			return label;
 		}
 		case ptp_property_olympus_Shutterspeed: {
-			// confirmed on OM-1: the B dial position reports one of these sentinels
-			// depending on the selected sub-mode
+			// confirmed on OM-1 by a live sub-mode sweep: the B dial position
+			// reports FC/FD/FA depending on the selected sub-mode; FB is the
+			// E-M1-generation Time sentinel (libgphoto2 config.c), kept for
+			// older bodies matched by the wildcard table entries
 			switch ((uint32_t)code) {
 				case 0xFFFFFFFC: return "Bulb";
 				case 0xFFFFFFFD: return "Live Time";
+				case 0xFFFFFFFB: return "Time";
 				case 0xFFFFFFFA: return "Live Comp";
 			}
 			// confirmed on OM-1: numerator << 16 | denominator, in seconds
@@ -564,9 +571,11 @@ bool ptp_olympus_initialise(indigo_device *device) {
 #ifndef USE_ICA_TRANSPORT
 	// a previous server run also leaves the camera in PC control mode - d052
 	// reverts to 2 only on physical unplug - and there the filesystem preamble
-	// is pointless, the GetDevicePropValue d052 read wedges the pipe and the
-	// mode switch is already done; the mode is detectable by the
-	// ChangedProperties dump size, ~450 bytes in boot mode 2 vs ~10KB in mode 1
+	// is pointless and the mode switch is already done; reading d052 at the
+	// entry of a leftover session has wedged the pipe (1015 answers normally
+	// in an established mode-1 session, the wedge is entry-state specific), so
+	// detect the mode by the ChangedProperties dump size instead, ~450 bytes
+	// in boot mode 2 vs ~10KB in mode 1
 	if (ptp_transaction_0_0_i(device, ptp_operation_olympus_ChangedProperties, &buffer, &size)) {
 		pc_mode_active = size > 4096;
 	}
@@ -715,8 +724,10 @@ bool ptp_olympus_initialise(indigo_device *device) {
 				}
 				ptp_olympus_handle_event(device, event.code, event.payload.params);
 			}
-			// do NOT query GetDevicePropValue afterwards - the OM-1 stops
-			// answering 1015 in PC control mode and the query wedges the pipe
+			// do NOT query GetDevicePropValue here - a 1015 fired into the
+			// transition window is swallowed and wedges the pipe (in a settled
+			// mode-1 session 1015 answers normally); the C108 wait plus the
+			// recovery already confirm the switch
 			ptp_olympus_recover(device);
 		}
 #endif
