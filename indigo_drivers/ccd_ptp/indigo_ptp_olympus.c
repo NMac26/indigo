@@ -310,7 +310,7 @@ bool ptp_olympus_handle_event(indigo_device *device, ptp_event_code code, uint32
 			INDIGO_DRIVER_LOG(DRIVER_NAME, "%s: param1 = %08x", ptp_event_olympus_code_label(code), params[0]);
 			if (params[0] != 0) {
 				void *buffer = NULL;
-				if (ptp_transaction_1_0_i(device, ptp_operation_GetObjectInfo, params[0], &buffer, NULL)) {
+				if (ptp_transaction_1_0_i(device, ptp_operation_GetObjectInfo, params[0], &buffer, NULL) && buffer) {
 					uint32_t size;
 					char filename[PTP_MAX_CHARS];
 					uint8_t *source = buffer;
@@ -665,8 +665,10 @@ bool ptp_olympus_initialise(indigo_device *device) {
 		return false;
 	}
 	// the OM-1 keeps the real P/A/S/M exposure mode in the standard but
-	// unadvertised ExposureProgramMode property, inject it Fuji-style
-	if (ptp_transaction_1_0_i(device, ptp_operation_GetDevicePropDesc, ptp_property_ExposureProgramMode, &buffer, &size)) {
+	// unadvertised ExposureProgramMode property, inject it Fuji-style (only
+	// when it is genuinely unadvertised - a wildcard-matched body that lists
+	// it would otherwise get a duplicate DSLR_PROGRAM)
+	if (!ptp_property_supported(device, ptp_property_ExposureProgramMode) && ptp_transaction_1_0_i(device, ptp_operation_GetDevicePropDesc, ptp_property_ExposureProgramMode, &buffer, &size)) {
 		int last = 0;
 		for (last = 0; PRIVATE_DATA->info_properties_supported[last]; last++) {
 		}
