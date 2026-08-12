@@ -350,6 +350,18 @@ bool ptp_olympus_handle_event(indigo_device *device, ptp_event_code code, uint32
 }
 
 #ifndef USE_ICA_TRANSPORT
+static bool ptp_olympus_device_reset(indigo_device *device) {
+	// PIMA 15740 class-specific Device Reset request, returns the camera's PTP
+	// stack to the idle state when a transaction is stuck (the equivalent of
+	// libgphoto2's ptp_usb_control_device_reset_request)
+	pthread_mutex_lock(&PRIVATE_DATA->usb_mutex);
+	int rc = libusb_control_transfer(PRIVATE_DATA->handle, LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE, 0x66, 0, PRIVATE_DATA->iface, NULL, 0, PRIVATE_DATA->transaction_timeout);
+	INDIGO_DRIVER_DEBUG(DRIVER_NAME, "libusb_control_transfer(DEVICE_RESET) -> %s", rc < 0 ? libusb_error_name(rc) : "OK");
+	OLYMPUS_PRIVATE_DATA->last_usb_error = rc < 0 ? rc : 0;
+	pthread_mutex_unlock(&PRIVATE_DATA->usb_mutex);
+	return rc >= 0;
+}
+
 static bool ptp_olympus_recover(indigo_device *device) {
 	// the OM-1 swallows requests fired while it is transitioning (mode switch,
 	// dial change) and the abandoned transaction wedges the bulk pipe; recover
@@ -357,7 +369,7 @@ static bool ptp_olympus_recover(indigo_device *device) {
 	// until the camera answers again
 	INDIGO_DRIVER_LOG(DRIVER_NAME, "recovering wedged PTP pipe with device reset");
 	for (int attempt = 0; attempt < 3; attempt++) {
-		if (!ptp_device_reset(device) && PRIVATE_DATA->last_usb_error == LIBUSB_ERROR_NO_DEVICE) {
+		if (!ptp_olympus_device_reset(device) && OLYMPUS_PRIVATE_DATA->last_usb_error == LIBUSB_ERROR_NO_DEVICE) {
 			// the camera is physically gone - retrying cannot succeed
 			return false;
 		}
