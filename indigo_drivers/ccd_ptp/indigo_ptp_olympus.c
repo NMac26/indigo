@@ -327,7 +327,11 @@ bool ptp_olympus_handle_event(indigo_device *device, ptp_event_code code, uint32
 		}
 		case ptp_event_olympus_CaptureComplete:
 			// OM-1: param1 is NOT an object handle, the image arrives via 0xC102,
-			// downloading here would fetch (and possibly delete) an unrelated object
+			// downloading here would fetch (and possibly delete) an unrelated object;
+			// note the OM-1 Mark II may differ - libgphoto2 downloads C103's param1
+			// as an object handle there (their PR #1123) and that body is also
+			// reported to tolerate d052 writes worse than this generation (their
+			// issue #1161) - first suspects if a Mark II misbehaves with this driver
 			INDIGO_DRIVER_LOG(DRIVER_NAME, "%s: param1 = %08x", ptp_event_olympus_code_label(code), params[0]);
 			return true;
 		case ptp_event_olympus_CreateRecView:
